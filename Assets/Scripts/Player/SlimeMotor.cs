@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering.Universal;
 
 [RequireComponent(typeof(Rigidbody))]
 public class SlimeMotor : MonoBehaviour
@@ -19,6 +20,8 @@ public class SlimeMotor : MonoBehaviour
     [SerializeField] private float hopForce = 3.5f;       // 위로 튀는 힘
     [SerializeField] private float hopFrequency = 6f;     // 튀는 속도 주기
 
+    [SerializeField] private GameObject decalPrefab;
+
     private Rigidbody rb;
     private Vector3 moveInput;
     private bool isGrounded;
@@ -27,17 +30,91 @@ public class SlimeMotor : MonoBehaviour
     private SlimeState currentState = SlimeState.Normal;
     private string currentSlimePattern = "Empty";
 
-    void Awake()
+    // 슬라임이 현재 흡수한 이미지 데이터
+    private Texture2D currentSlimeTexture;
+
+    // 슬라임 박스의 외형을 바꾸기 위한 렌더러
+    private MeshRenderer slimeRenderer;
+
+    private void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        slimeRenderer = GetComponent<MeshRenderer>(); // 렌더러 캐싱
+
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         rb.useGravity = true;
     }
-    public void FixedUpdate()
+
+    private void FixedUpdate()
     {
         EvaluateGround();
         ApplySuspension();
         ApplyMovement();
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (currentState == SlimeState.Dashing)
+        {
+            if (collision.gameObject.TryGetComponent<Wall>(out Wall hitWall))
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+
+                ContactPoint contact = collision.contacts[0];
+                Vector3 impactPoint = contact.point;
+                Vector3 impactNormal = contact.normal; // 벽이 바라보는 방향 벡터
+
+                // [상태 A] 슬라임이 비어있으면 벽의 패턴과 텍스처를 복사
+                if (currentSlimePattern == "Empty" && hitWall.GetPatternID() != "Empty")
+                {
+                    currentSlimePattern = hitWall.GetPatternID();
+                    currentSlimeTexture = hitWall.GetTexture();
+
+                    // 체크리스트 1 달성: 슬라임 박스의 외형 텍스처를 실시간 교체
+                    if (slimeRenderer != null && currentSlimeTexture != null)
+                    {
+                        slimeRenderer.material.SetTexture("_BaseMap", currentSlimeTexture);
+                    }
+
+                    Debug.Log($"<color=cyan>[벽지 패턴 {currentSlimePattern} 시각 데이터 복사 완료]</color>");
+                }
+                // [상태 B] 슬라임이 이미 패턴을 들고 있다면 빈 벽에 도장을 찍고 데이터를 넘김
+                else if (currentSlimePattern != "Empty" && hitWall.GetPatternID() == "Empty")
+                {
+                    // 1. 벽 스크립트에 데이터 전송
+                    hitWall.SetPattern(currentSlimePattern, currentSlimeTexture);
+
+                    // 2. 체크리스트 2 & 4 달성: 정확한 좌표와 비뚤어진 충돌 각도를 반영하여 데칼 생성
+                    if (decalPrefab != null)
+                    {
+                        // 데칼 투사 정렬: 데칼의 Forward(Z축)가 벽 내부(-impactNormal)를 향하게 정렬하되,
+                        // 위쪽 축(Up)을 슬라임의 진행/몸체 방향(transform.up)과 정렬하면 비뚤게 부딪혔을 때 도장도 비뚤게 각도가 들어갑니다.
+                        Quaternion decalRotation = Quaternion.LookRotation(-impactNormal, Vector3.up);
+
+                        // 약간의 오프셋을 주어 벽면 살짝 앞에 생성 (Z-Fighting 방지)
+                        Vector3 spawnPos = impactPoint + (impactNormal * 0.02f);
+
+                        GameObject spawnedDecal = Instantiate(decalPrefab, spawnPos, decalRotation);
+
+                        // 생성된 데칼 프로젝터에 슬라임이 가졌던 무늬 텍스처 주입
+                        if (spawnedDecal.TryGetComponent<DecalProjector>(out DecalProjector projector))
+                        {
+                            // 인스턴스화된 머티리얼을 복사하여 독립적인 텍스처 지정
+                            projector.material = new Material(projector.material);
+                            projector.material.SetTexture("_BaseMap", currentSlimeTexture);
+                        }
+                    }
+
+                    // 전송 후 다시 빈 상태로 리셋 및 슬라임 외형 복구
+                    currentSlimePattern = "Empty";
+                    currentSlimeTexture = null;
+                    if (slimeRenderer != null) slimeRenderer.material.SetTexture("_BaseMap", null);
+                }
+
+                EndBodySlam();
+            }
+        }
     }
 
     public void SetMoveInput(Vector3 input)
@@ -71,7 +148,6 @@ public class SlimeMotor : MonoBehaviour
             rb.AddForce(-rayDir * springForce, ForceMode.Acceleration);
         }
     }
-
     private void ApplyMovement()
     {
         if (currentState == SlimeState.Dashing)
@@ -116,44 +192,6 @@ public class SlimeMotor : MonoBehaviour
 
         // 정면을 향해 강한 수평/직선 힘 가하기
         rb.AddForce(direction.normalized * force, ForceMode.VelocityChange);
-    }
-
-    private void OnCollisionEnter(Collision collision)
-    {
-        // 대시 상태일 때만 벽면 정지/상태 변경 로직을 수행함
-        if (currentState == SlimeState.Dashing)
-        {
-            // 부딪힌 오브젝트가 Wall 컴포넌트를 가지고 있는지 확인
-            if (collision.gameObject.TryGetComponent<Wall>(out Wall hitWall))
-            {
-                // 1. 물리 속도 즉시 제로화 (딱 멈춤)
-                rb.linearVelocity = Vector3.zero;
-                rb.angularVelocity = Vector3.zero;
-
-                // 2. 충돌 지점 데이터 확보 (Phase 2 데칼 생성용 예비)
-                ContactPoint contact = collision.contacts[0];
-                Vector3 impactPoint = contact.point;
-                Vector3 impactNormal = contact.normal;
-
-                // 3. [복사/붙여넣기 데이터 로직]
-                if (currentSlimePattern == "Empty")
-                {
-                    // 슬라임이 빈 상태면 벽의 패턴을 복사 (상태 A)
-                    currentSlimePattern = hitWall.GetPatternID();
-                    Debug.Log($"<color=cyan>[벽지 패턴 {currentSlimePattern} 복사 완료]</color>");
-                }
-                else
-                {
-                    // 슬라임이 이미 패턴을 들고 있다면 벽에 무늬를 칠함 (상태 B)
-                    hitWall.SetPatternID(currentSlimePattern);
-                    Debug.Log($"<color=yellow>[벽면에 {currentSlimePattern} 패턴 적용 완료]</color>");
-                    currentSlimePattern = "Empty"; // 전송 후 다시 빈 상태로 리셋
-                }
-
-                // 4. 상태 복구
-                EndBodySlam();
-            }
-        }
     }
 
     private void EndBodySlam()

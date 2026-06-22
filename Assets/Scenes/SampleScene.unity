@@ -527,6 +527,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Wall
   patternID: Patern_A
+  patternTexture: {fileID: 0}
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -731,6 +732,7 @@ MonoBehaviour:
   springDamper: 20
   hopForce: 3.5
   hopFrequency: 6
+  decalPrefab: {fileID: 4754075976820978006, guid: dd7c1891f3a86d74c9cd40c7e29d3d22, type: 3}
 --- !u!54 &1176580549
 Rigidbody:
   m_ObjectHideFlags: 0
@@ -897,6 +899,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Wall
   patternID: Empty
+  patternTexture: {fileID: 0}
 --- !u!65 &1675066287
 BoxCollider:
   m_ObjectHideFlags: 0
